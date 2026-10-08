@@ -131,6 +131,8 @@ function youPayload(game, p, t) {
     points: p.points,
     fx: fxRemaining(p, t),
     cooldownMs: p.role === 'cat' ? Math.max(0, game.captureCooldownUntil - t) : 0,
+    lockMs: Math.max(0, (p.powerLockUntil || 0) - t),
+    lockLabel: (p.powerLockUntil || 0) > t ? p.powerLockLabel : null,
   };
 }
 
@@ -191,6 +193,8 @@ function startGame(game) {
     p.captured = false;
     p.fx = {};
     p.lastContactAt = 0;
+    p.powerLockUntil = 0;
+    p.powerLockLabel = null;
   }
   game.startedAt = t;
   // le centre de la zone sera fixé sur la position du chat au premier tick
@@ -632,6 +636,12 @@ io.on('connection', (socket) => {
       return cb({ ok: false, error: 'Pouvoir désactivé par l’hôte.' });
     if (player.points < def.cost)
       return cb({ ok: false, error: `Pas assez de points (${def.cost} requis).` });
+    // un seul pouvoir à durée en cours à la fois : lisibilité avant tout
+    if (def.dur > 0 && (player.powerLockUntil || 0) > t)
+      return cb({
+        ok: false,
+        error: `${player.powerLockLabel} est encore actif (${Math.ceil((player.powerLockUntil - t) / 1000)} s). Un seul pouvoir à la fois !`,
+      });
 
     const cat = game.players.get(game.catToken);
     let extra = {};
@@ -647,6 +657,7 @@ io.on('connection', (socket) => {
           extra = { msg: `Le téléphone de ${m.name} sonne !` };
         } else {
           m.fx.reveal = t + def.dur * 1000;
+          emitTo(m, 'toast', { msg: `🔍 Le chat t’a révélé·e : position précise visible ${def.dur} s !` });
           extra = { msg: `${m.name} est révélé·e pendant ${def.dur} s.` };
         }
       } else if (id === 'ghost') {
@@ -689,6 +700,10 @@ io.on('connection', (socket) => {
     }
 
     player.points -= def.cost;
+    if (def.dur > 0) {
+      player.powerLockUntil = t + def.dur * 1000;
+      player.powerLockLabel = def.label;
+    }
     cb({ ok: true, you: youPayload(game, player, t), ...extra });
   });
 

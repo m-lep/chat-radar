@@ -707,6 +707,7 @@ function renderPowers() {
     b.className = 'powerBtn';
     b.dataset.power = id;
     b.dataset.cost = def.cost;
+    b.dataset.label = def.label;
     const desc = def.dur > 0 ? `${def.desc} (${def.dur} s)` : def.desc;
     b.innerHTML = `<span class="pname">${def.label}</span><span class="pcost">${def.cost} pts</span><span class="pdesc">${desc}</span>`;
     b.onclick = () => buyPower(id, def);
@@ -715,11 +716,34 @@ function renderPowers() {
   refreshPowerButtons();
 }
 
+let prevLockLabel = null;
+
 function refreshPowerButtons() {
   const pts = currentPoints();
+  const elapsed = Date.now() - S.youRxAt;
+  const lockLeft = Math.max(0, (S.you?.lockMs || 0) - elapsed);
+  const lockLabel = lockLeft > 0 ? S.you?.lockLabel : null;
+
   document.querySelectorAll('.powerBtn').forEach((b) => {
-    b.disabled = pts < parseInt(b.dataset.cost, 10) || now() < S.graceUntil;
+    const isActive = lockLabel && b.dataset.label === lockLabel;
+    b.classList.toggle('activePower', !!isActive);
+    const costEl = b.querySelector('.pcost');
+    if (costEl) {
+      costEl.textContent = isActive
+        ? `⏳ actif ${Math.ceil(lockLeft / 1000)} s`
+        : `${b.dataset.cost} pts`;
+    }
+    b.disabled =
+      lockLeft > 0 || pts < parseInt(b.dataset.cost, 10) || now() < S.graceUntil;
   });
+
+  // alerte claire quand l'effet se termine
+  if (!lockLabel && prevLockLabel) {
+    toast(`✅ ${prevLockLabel} terminé — pouvoirs disponibles.`);
+    prevLockLabel = null;
+  } else if (lockLabel) {
+    prevLockLabel = lockLabel;
+  }
 }
 
 function currentPoints() {

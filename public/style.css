@@ -276,9 +276,9 @@ input:focus, select:focus { border-color: var(--accent); }
 
 .fxRow { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; min-height: 4px; }
 .fxChip {
-  font-size: 0.78rem; font-weight: 600;
+  font-size: 0.88rem; font-weight: 700;
   background: #e8efff; color: var(--accent);
-  border-radius: 999px; padding: 4px 10px;
+  border-radius: 999px; padding: 6px 13px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -293,6 +293,13 @@ input:focus, select:focus { border-color: var(--accent); }
   display: flex; flex-direction: column; gap: 2px;
 }
 .powerBtn:disabled { opacity: 0.4; }
+.powerBtn.activePower {
+  opacity: 1;
+  border-color: var(--accent);
+  background: #eef4ff;
+  box-shadow: 0 0 0 2px rgba(47, 109, 246, 0.25);
+}
+.powerBtn.activePower .pcost { color: var(--accent); font-weight: 800; }
 .powerBtn .pname { font-weight: 700; font-size: 0.85rem; }
 .powerBtn .pcost { font-size: 0.75rem; color: var(--accent); font-weight: 600; }
 .powerBtn .pdesc { font-size: 0.68rem; color: var(--muted); line-height: 1.25; }
