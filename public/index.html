@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Chat Radar</title>
+  <meta name="theme-color" content="#f7f6f2" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main id="app">
+
+    <!-- ACCUEIL -->
+    <section id="screen-home" class="screen">
+      <h1 class="logo">🐱 Chat Radar 🐭</h1>
+      <p class="tagline">Le jeu du chat et de la souris, dans la vraie vie.</p>
+      <input id="nameInput" type="text" maxlength="16" placeholder="Ton pseudo" autocomplete="nickname" />
+      <button id="createBtn" class="btn primary">Créer une partie</button>
+      <div class="divider"><span>ou</span></div>
+      <div class="joinRow">
+        <input id="codeInput" type="text" maxlength="4" placeholder="CODE" autocapitalize="characters" autocomplete="off" />
+        <button id="joinBtn" class="btn">Rejoindre</button>
+      </div>
+      <p id="homeError" class="error"></p>
+      <p class="hint" id="simHint" hidden>Mode simulation actif : ta position est fictive, clique sur la carte pour te déplacer.</p>
+    </section>
+
+    <!-- LOBBY -->
+    <section id="screen-lobby" class="screen" hidden>
+      <p class="label">Code de la partie</p>
+      <p id="lobbyCode" class="bigCode">····</p>
+      <p class="hint">Chacun rejoint avec ce code depuis son téléphone.</p>
+      <div class="permBox">
+        <p class="label">Prépare ton téléphone</p>
+        <button id="geoPermBtn" class="btn">📍 Autoriser la position</button>
+        <button id="compassPermBtn" class="btn">🧭 Activer la boussole</button>
+        <button id="testAlertBtn" class="btn">🔊 Tester le son et la vibration</button>
+        <p id="permHint" class="hint"></p>
+      </div>
+      <ul id="playerList" class="playerList"></ul>
+      <p id="catHint" class="hint" hidden>Touche un joueur pour le désigner comme chat (sinon : tirage au sort).</p>
+      <div id="hostControls" hidden>
+        <label class="label" for="durationSel">Durée de la chasse</label>
+        <select id="durationSel">
+          <option value="10">10 min</option>
+          <option value="15">15 min</option>
+          <option value="20">20 min</option>
+          <option value="30" selected>30 min</option>
+          <option value="45">45 min</option>
+          <option value="60">60 min</option>
+        </select>
+        <label class="label" for="zoneSel">Zone de jeu rétrécissante</label>
+        <select id="zoneSel">
+          <option value="0" selected>Désactivée</option>
+          <option value="200">200 m au départ</option>
+          <option value="300">300 m au départ</option>
+          <option value="500">500 m au départ</option>
+          <option value="800">800 m au départ</option>
+          <option value="1200">1,2 km au départ</option>
+        </select>
+        <label class="label" for="graceSel">Attente avant le début (dispersion des souris)</label>
+        <select id="graceSel">
+          <option value="0">Aucune</option>
+          <option value="15">15 s</option>
+          <option value="30">30 s</option>
+          <option value="60" selected>60 s</option>
+          <option value="90">90 s</option>
+          <option value="120">2 min</option>
+          <option value="180">3 min</option>
+          <option value="300">5 min</option>
+        </select>
+      </div>
+      <button id="costsToggle" class="btn" hidden>⚙️ Prix des pouvoirs</button>
+      <div id="costsPanel" class="costsPanel" hidden></div>
+      <div id="hostStart" hidden>
+        <button id="startBtn" class="btn primary">Lancer la partie</button>
+      </div>
+      <p id="settingsSummary" class="hint" hidden></p>
+      <p id="waitHost" class="hint" hidden>En attente du lancement par l’hôte…</p>
+      <p id="lobbyError" class="error"></p>
+      <button id="leaveBtn" class="btn ghost">Quitter</button>
+    </section>
+
+    <!-- JEU -->
+    <section id="screen-game" class="screen game" hidden>
+      <header class="topbar">
+        <span id="roleBadge" class="badge">🐭 Souris</span>
+        <span id="pointsBox" class="points">0 pts</span>
+        <span id="timerBox" class="timer">--:--</span>
+      </header>
+      <div class="radarWrap">
+        <div id="map"></div>
+        <div id="jamOverlay" class="jamOverlay" hidden><span>⚡ RADAR BROUILLÉ</span></div>
+        <div id="senseBanner" class="senseBanner" hidden>🔔 Le chat est à moins de 40 m !</div>
+        <div id="decoyBanner" class="decoyBanner" hidden>🪤 Touche la carte pour poser ton leurre</div>
+        <div id="zoneBanner" class="zoneBanner" hidden>⛔ HORS ZONE — tu es visible et tu ne gagnes rien !</div>
+        <button id="recenterBtn" class="recenterBtn" hidden>📍 Recentrer</button>
+        <div id="graceOverlay" class="graceOverlay" hidden>
+          <p id="graceText"></p>
+          <p id="graceCount" class="graceCount"></p>
+        </div>
+      </div>
+      <p id="gameStatus" class="status"></p>
+      <button id="compassBtn" class="btn ghost" hidden>🧭 Activer la boussole</button>
+      <div id="fxRow" class="fxRow"></div>
+      <button id="captureBtn" class="btn danger" hidden>🎯 J’ai vu une souris</button>
+      <div id="powersRow" class="powersRow"></div>
+      <p id="gpsWarn" class="error" hidden></p>
+    </section>
+
+    <!-- FIN -->
+    <section id="screen-end" class="screen" hidden>
+      <h2 id="endTitle"></h2>
+      <p id="endSub" class="hint"></p>
+      <table id="scoreTable" class="scores"></table>
+      <button id="homeBtn" class="btn primary">Retour à l’accueil</button>
+    </section>
+
+  </main>
+
+  <!-- Modale générique -->
+  <div id="modal" class="modal" hidden>
+    <div class="modalCard">
+      <h3 id="modalTitle"></h3>
+      <p id="modalText"></p>
+      <div id="modalList" class="modalList"></div>
+      <div id="modalBtns" class="modalBtns"></div>
+    </div>
+  </div>
+
+  <!-- Alerte sonnerie -->
+  <div id="ringOverlay" class="ringOverlay" hidden>
+    <p>📢 TON TÉLÉPHONE SONNE !</p>
+  </div>
+
+  <div id="toasts" class="toasts"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
