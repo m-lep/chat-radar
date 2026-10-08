@@ -30,6 +30,7 @@
         <button id="joinBtn" class="btn">Rejoindre</button>
       </div>
       <p id="homeError" class="error"></p>
+      <button class="btn ghost rulesBtn">📖 Règles précises</button>
       <p class="hint" id="simHint" hidden>Mode simulation actif : ta position est fictive, clique sur la carte pour te déplacer.</p>
     </section>
 
@@ -91,6 +92,7 @@
       <p id="settingsSummary" class="hint" hidden></p>
       <p id="waitHost" class="hint" hidden>En attente du lancement par l’hôte…</p>
       <p id="lobbyError" class="error"></p>
+      <button class="btn ghost rulesBtn">📖 Règles précises</button>
       <button id="leaveBtn" class="btn ghost">Quitter</button>
     </section>
 
@@ -120,6 +122,7 @@
       <div id="powersRow" class="powersRow"></div>
       <button id="logToggle" class="btn ghost">📜 Journal de partie</button>
       <div id="logPanel" class="logPanel" hidden></div>
+      <button class="btn ghost rulesBtn">📖 Règles précises</button>
       <p id="gpsWarn" class="error" hidden></p>
     </section>
 
@@ -132,6 +135,117 @@
     </section>
 
   </main>
+
+  <!-- Règles précises -->
+  <div id="rulesOverlay" class="rulesOverlay" hidden>
+    <div class="rulesCard">
+      <header class="rulesHead">
+        <h2>📖 Règles précises</h2>
+        <button id="rulesClose" class="rulesClose">✕</button>
+      </header>
+      <div class="rulesBody">
+
+        <section>
+          <h3>🎯 Le but</h3>
+          <p>Des <b>chats</b> (1 ou plusieurs) chassent des <b>souris</b>, dans la vraie vie.</p>
+          <ul>
+            <li>Les <b>chats gagnent</b> si toutes les souris sont capturées avant la fin du temps.</li>
+            <li>Les <b>souris gagnent</b> s'il en reste au moins une à la fin.</li>
+          </ul>
+          <p class="rNote">Durée, dispersion, zone, caches et pouvoirs : réglés par l'hôte dans le lobby.</p>
+        </section>
+
+        <section>
+          <h3>🗺️ Le radar — volontairement inégal</h3>
+          <p>C'est le cœur du jeu : <b>les souris ont l'info, les chats ont la capture.</b></p>
+          <div class="rCompare">
+            <div class="rSide">
+              <p class="rSideTitle">🐭 Ce que voient les souris</p>
+              <ul>
+                <li>Les chats, rafraîchis <b>toutes les 4 s</b>, position quasi exacte.</li>
+                <li>Les autres souris : seulement avec le pouvoir <b>Entraide</b>.</li>
+              </ul>
+            </div>
+            <div class="rSide">
+              <p class="rSideTitle">🐱 Ce que voient les chats</p>
+              <ul>
+                <li>Les souris, seulement par <b>scans toutes les 25 s</b> (10 s sous Radar&nbsp;rapide).</li>
+                <li>Chaque blip est décalé de <b>±20 m</b> au hasard : l'endroit exact reste incertain.</li>
+                <li>Blips <b>anonymes</b> — savoir QUI est où se paie (Révélation, Coup de filet).</li>
+                <li>Entre deux scans, les blips <b>pâlissent</b> : plus c'est pâle, plus c'est vieux.</li>
+              </ul>
+            </div>
+          </div>
+          <ul>
+            <li>📵 Couper son GPS ne cache pas : ton <b>dernier blip reste figé</b> sur place.</li>
+            <li>🐱🐱 Plusieurs chats <b>partagent le même scan</b> (le Radar rapide de l'un profite à tous, un Brouillage les aveugle tous) — mais chacun a ses points, ses pouvoirs et sa recharge de capture.</li>
+          </ul>
+        </section>
+
+        <section>
+          <h3>🤝 La capture</h3>
+          <ol>
+            <li>Le chat te voit <b>dans la vraie vie</b> et touche ton pseudo : « J'ai vu une souris ».</li>
+            <li>Le serveur vérifie en silence : vous êtes à <b>moins de 15 m</b> (GPS frais de moins de 30 s).</li>
+            <li>La souris a <b>25 s</b> pour <b>accepter ou contester</b>.</li>
+          </ol>
+          <ul>
+            <li>Échec (trop loin, contesté ou sans réponse) → ce chat recharge <b>45 s</b>.</li>
+            <li>Et s'il s'est trompé (trop loin ou contesté) → <b>−20 pts</b>.</li>
+            <li>Capturée = <b>spectatrice</b> : tu vois tout le monde sur la carte.</li>
+          </ul>
+        </section>
+
+        <section>
+          <h3>🧮 Les points</h3>
+          <p class="rSideTitle">🐱 Chat</p>
+          <ul>
+            <li><b>+1</b> toutes les 10 s</li>
+            <li><b>+15</b> contact radar : une souris passe à moins de 50 m (max 1 fois par souris toutes les 2 min)</li>
+            <li><b>+40</b> par capture</li>
+            <li><b>−20</b> par déclaration ratée</li>
+          </ul>
+          <p class="rSideTitle">🐭 Souris</p>
+          <ul>
+            <li><b>+1</b> toutes les 10 s de survie</li>
+            <li><b>+3</b> de plus par tranche de 10 s quand un chat est à <b>moins de 20 m</b> — frôler le danger paie</li>
+            <li><b>+30</b> si tu survis jusqu'au bout</li>
+          </ul>
+          <p class="rSideTitle">💰 Tout le monde</p>
+          <ul>
+            <li><b>+15</b> par cache ramassé (passer à moins de 20 m)</li>
+          </ul>
+        </section>
+
+        <section>
+          <h3>⚡ Les pouvoirs</h3>
+          <ul>
+            <li>Ils s'achètent avec tes points, en pleine partie (prix et durées : voir ⚙️ dans le lobby).</li>
+            <li><b>Un seul pouvoir actif à la fois</b> : tant que l'effet dure, les autres sont verrouillés.</li>
+            <li>Après usage, le même pouvoir se <b>recharge : durée de l'effet + 60 s</b>.</li>
+          </ul>
+        </section>
+
+        <section>
+          <h3>⭕ Zone &amp; 💰 caches (options de l'hôte)</h3>
+          <ul>
+            <li>La <b>zone</b> se fixe sur le chat à la fin de la dispersion et <b>rétrécit</b> jusqu'à 40 m à la fin. Dehors : <b>0 point</b>, visible à <b>chaque scan</b> (Invisibilité et Leurre ne protègent plus).</li>
+            <li>Les <b>caches</b> apparaissent toutes les ~2 min sur de vraies rues, pour tout le monde. Premier arrivé à moins de 20 m : <b>+15 pts</b>. Ils expirent au bout de 4 min.</li>
+          </ul>
+        </section>
+
+        <section>
+          <h3>📱 Important sur téléphone</h3>
+          <ul>
+            <li>Garde <b>l'écran allumé</b>, téléphone en main : verrouillé, ton GPS se fige.</li>
+            <li>Volume à fond et <b>mode silencieux coupé</b> (sonneries et alertes).</li>
+            <li>iPhone : pas de vibrations (limite d'Apple) — les alertes passent par le son et l'écran.</li>
+          </ul>
+        </section>
+
+      </div>
+    </div>
+  </div>
 
   <!-- Modale générique -->
   <div id="modal" class="modal" hidden>

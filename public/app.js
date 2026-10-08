@@ -1463,6 +1463,18 @@ $('codeInput').addEventListener('input', () => {
   $('codeInput').value = $('codeInput').value.toUpperCase();
 });
 
+// règles précises : plusieurs boutons ouvrent le même panneau
+document.querySelectorAll('.rulesBtn').forEach((b) => {
+  b.onclick = () => {
+    $('rulesOverlay').hidden = false;
+    $('rulesOverlay').querySelector('.rulesBody').scrollTop = 0;
+  };
+});
+$('rulesClose').onclick = () => ($('rulesOverlay').hidden = true);
+$('rulesOverlay').addEventListener('click', (e) => {
+  if (e.target === $('rulesOverlay')) $('rulesOverlay').hidden = true;
+});
+
 // PWA : service worker minimal (installation sur l'écran d'accueil)
 if ('serviceWorker' in navigator && window.isSecureContext) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
