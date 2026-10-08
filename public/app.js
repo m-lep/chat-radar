@@ -22,12 +22,14 @@ const S = {
   skew: 0, // serverNow - Date.now()
   catName: null,
   mice: [], // [{token,name}] souris libres (pour la capture / ciblage)
+  log: [], // journal de partie [{t,msg}]
   pendingTarget: null,
 };
 
 const R = {
   // radar souris
-  cat: null, // {lat,lng,ts,rxAt}
+  cats: [], // [{name,lat,lng,ts}] — il peut y avoir plusieurs chats
+  catsRxAt: 0,
   ghost: false,
   senseNear: false,
   mates: null,
@@ -46,6 +48,8 @@ const R = {
   // zone rétrécissante
   zone: null, // {lat,lng,r}
   outside: false,
+  // caches bonus
+  caches: [],
   sweep: 0,
 };
 
@@ -463,6 +467,10 @@ function applySnapshot(snap) {
   S.skew = (snap.serverNow || Date.now()) - Date.now();
   S.catName = snap.catName;
   S.mice = snap.mice || [];
+  if (snap.log) {
+    S.log = snap.log;
+    renderLog();
+  }
 
   if (snap.state === 'lobby') {
     renderLobby();
@@ -540,13 +548,15 @@ function renderLobby() {
   $('durationSel').value = String(lb.durationMin);
   $('graceSel').value = String(lb.graceSec);
   $('zoneSel').value = String(lb.zoneCfg || 0);
+  $('cachesSel').value = lb.cachesEnabled ? '1' : '0';
   $('costsToggle').hidden = false;
   $('settingsSummary').hidden = isHost;
   if (!isHost) {
     $('settingsSummary').textContent =
       `Réglages de l’hôte : chasse de ${lb.durationMin} min · ` +
       (lb.graceSec ? `${lb.graceSec} s de dispersion` : 'départ immédiat') +
-      (lb.zoneCfg ? ` · zone rétrécissante de ${lb.zoneCfg} m` : '');
+      (lb.zoneCfg ? ` · zone rétrécissante de ${lb.zoneCfg} m` : '') +
+      (lb.cachesEnabled ? ' · caches bonus 💰' : '');
   }
   renderCosts();
 
@@ -576,6 +586,9 @@ $('graceSel').onchange = () =>
 
 $('zoneSel').onchange = () =>
   socket.emit('setZone', { radius: parseInt($('zoneSel').value, 10) });
+
+$('cachesSel').onchange = () =>
+  socket.emit('setCaches', { on: $('cachesSel').value === '1' });
 
 $('costsToggle').onclick = () => {
   const p = $('costsPanel');
@@ -888,9 +901,10 @@ socket.on('youCaptured', () => {
 // ------------------------------------------------------------------ événements radar
 
 socket.on('mouseRadar', (d) => {
-  if (d.cat) R.cat = { ...d.cat, rxAt: Date.now() };
-  else if (!d.ghost) R.cat = null;
+  R.cats = d.cats || [];
+  R.catsRxAt = Date.now();
   R.ghost = d.ghost;
+  R.caches = d.caches || [];
   R.mates = d.mates;
   R.senseNear = d.senseNear;
   // mise à jour immédiate (événementielle) : ne dépend pas de la boucle UI,
@@ -923,6 +937,10 @@ socket.on('youUpdate', (d) => {
   S.youRxAt = Date.now();
   if (d.mice) S.mice = d.mice;
   if ('zone' in d) R.zone = d.zone || null;
+  if ('caches' in d) {
+    R.caches = d.caches || [];
+    rebuildDynamic();
+  }
   S.skew = d.serverNow - Date.now();
   refreshPowerButtons();
 });
@@ -951,6 +969,7 @@ socket.on('reveal', (d) => {
 socket.on('spectate', (d) => {
   R.spectators = d.players || [];
   if ('zone' in d) R.zone = d.zone || null;
+  if ('caches' in d) R.caches = d.caches || [];
   S.you = d.you;
   S.youRxAt = Date.now();
   rebuildDynamic();
@@ -977,6 +996,43 @@ socket.on('ring', ({ sec }) => {
 });
 
 socket.on('toast', ({ msg }) => toast(msg));
+
+// ------------------------------------------------------------------ journal de partie
+
+socket.on('log', (e) => {
+  S.log.push(e);
+  if (S.log.length > 100) S.log.shift();
+  renderLog();
+});
+
+$('logToggle').onclick = () => {
+  const p = $('logPanel');
+  p.hidden = !p.hidden;
+  $('logToggle').textContent = p.hidden ? '📜 Journal de partie' : '📜 Masquer le journal';
+  renderLog();
+};
+
+function relTime(t) {
+  const s = Math.max(0, Math.round((Date.now() + S.skew - t) / 1000));
+  if (s < 60) return `il y a ${s} s`;
+  return `il y a ${Math.floor(s / 60)} min`;
+}
+
+function renderLog() {
+  const p = $('logPanel');
+  if (p.hidden) return;
+  if (!S.log.length) {
+    p.innerHTML = '<div class="logEntry" style="color:var(--muted)">Rien à signaler pour l’instant…</div>';
+    return;
+  }
+  p.innerHTML = [...S.log]
+    .reverse()
+    .map(
+      (e) =>
+        `<div class="logEntry"><span class="logTime">${relTime(e.t)}</span>${escapeHtml(e.msg)}</div>`
+    )
+    .join('');
+}
 
 socket.on('lobby', (lb) => {
   S.lobby = lb;
@@ -1157,6 +1213,11 @@ function rebuildDynamic() {
         })
       );
     }
+    for (const c of R.caches) {
+      dynLayer.addLayer(
+        L.marker([c.lat, c.lng], { icon: blipIcon('cache', '💰', null), interactive: false })
+      );
+    }
     return;
   }
 
@@ -1185,10 +1246,10 @@ function rebuildDynamic() {
       }
     }
   } else {
-    if (!R.ghost && R.cat) {
+    for (const c of R.cats) {
       dynLayer.addLayer(
-        L.marker([R.cat.lat, R.cat.lng], {
-          icon: blipIcon('cat', '🐱', S.catName || 'chat'),
+        L.marker([c.lat, c.lng], {
+          icon: blipIcon('cat', '🐱', c.name || 'chat'),
           interactive: false,
         })
       );
@@ -1209,6 +1270,13 @@ function rebuildDynamic() {
         })
       );
     }
+  }
+
+  // caches bonus : visibles par tout le monde
+  for (const c of R.caches) {
+    dynLayer.addLayer(
+      L.marker([c.lat, c.lng], { icon: blipIcon('cache', '💰', null), interactive: false })
+    );
   }
 }
 
@@ -1300,12 +1368,17 @@ function updateMapLoop() {
       );
     }
   } else {
-    if (R.ghost) {
-      statusLine('👻 Le chat a disparu du radar…');
-    } else if (R.cat) {
-      const d = Math.round(distClient(myPos, R.cat));
-      const age = Math.round((t - R.cat.rxAt) / 1000);
-      statusLine(`Chat à ~${d} m · signal d’il y a ${age} s${R.senseNear ? ' · 🔔 TOUT PRÈS' : ''}`);
+    if (R.cats.length) {
+      let dMin = Infinity;
+      for (const c of R.cats) dMin = Math.min(dMin, distClient(myPos, c));
+      const age = Math.round((t - R.catsRxAt) / 1000);
+      const label = R.cats.length > 1 ? 'Chat le plus proche' : 'Chat';
+      statusLine(
+        `${label} à ~${Math.round(dMin)} m · signal d’il y a ${age} s` +
+          `${R.ghost ? ' · 👻 un chat est invisible' : ''}${R.senseNear ? ' · 🔔 TOUT PRÈS' : ''}`
+      );
+    } else if (R.ghost) {
+      statusLine(`👻 ${S.catName && S.catName.includes('&') ? 'Les chats ont' : 'Le chat a'} disparu du radar…`);
     } else {
       statusLine('En attente du signal du chat…');
     }

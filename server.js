@@ -30,6 +30,10 @@ const SENSE_DIST_M = 40;            // portée du sixième sens
 const SURVIVAL_BONUS = 30;
 const ZONE_MIN_R = 40;              // rayon final de la zone rétrécissante
 const ZONE_CHOICES = [0, 200, 300, 500, 800, 1200]; // 0 = désactivée
+const CACHE_VALUE_PTS = 15;         // points par cache bonus ramassé
+const CACHE_COLLECT_M = 20;         // distance de ramassage
+const CACHE_TTL_MS = 4 * 60_000;    // un cache non ramassé disparaît
+const CACHE_MAX = 2;                // caches simultanés max
 
 // dur = durée d'effet en secondes (0 = instantané, non éditable) ;
 // cost/dur/enabled sont copiés par partie et réglables par l'hôte
@@ -110,6 +114,30 @@ function freeMice(game) {
   return [...game.players.values()].filter((p) => p.role === 'mouse' && !p.captured);
 }
 
+function cats(game) {
+  return [...game.players.values()].filter((p) => p.role === 'cat');
+}
+
+// ---------------------------------------------------------------- journal
+
+// aud : 'all' (tout le monde), 'cats' (tous les chats), ou un token de joueur
+function logEvent(game, aud, msg) {
+  const e = { t: Date.now(), aud, msg };
+  game.log.push(e);
+  if (game.log.length > 200) game.log.shift();
+  const payload = { t: e.t, msg };
+  if (aud === 'all') io.to(room(game)).emit('log', payload);
+  else if (aud === 'cats') for (const c of cats(game)) emitTo(c, 'log', payload);
+  else emitTo(game.players.get(aud), 'log', payload);
+}
+
+function logVisible(game, p) {
+  return game.log
+    .filter((e) => e.aud === 'all' || (e.aud === 'cats' && p.role === 'cat') || e.aud === p.token)
+    .slice(-40)
+    .map((e) => ({ t: e.t, msg: e.msg }));
+}
+
 function fxRemaining(p, t) {
   const out = {};
   for (const [k, v] of Object.entries(p.fx)) {
@@ -130,7 +158,7 @@ function youPayload(game, p, t) {
     captured: p.captured,
     points: p.points,
     fx: fxRemaining(p, t),
-    cooldownMs: p.role === 'cat' ? Math.max(0, game.captureCooldownUntil - t) : 0,
+    cooldownMs: p.role === 'cat' ? Math.max(0, (p.captureCooldownUntil || 0) - t) : 0,
     lockMs: Math.max(0, (p.powerLockUntil || 0) - t),
     lockLabel: (p.powerLockUntil || 0) > t ? p.powerLockLabel : null,
   };
@@ -143,14 +171,14 @@ function lobbyPayload(game) {
     durationMin: game.durationMin,
     graceSec: game.graceSec,
     zoneCfg: game.zoneCfg,
+    cachesEnabled: game.cachesEnabled,
     powers: game.powers,
     hostToken: game.hostToken,
-    catToken: game.catToken,
     players: [...game.players.values()].map((p) => ({
       token: p.token,
       name: p.name,
       connected: p.connected,
-      isCat: p.token === game.catToken,
+      isCat: game.catTokens.has(p.token),
       isHost: p.token === game.hostToken,
     })),
   };
@@ -167,10 +195,11 @@ function snapshot(game, p) {
     graceUntil: game.graceUntil,
     endsAt: game.endsAt,
     serverNow: t,
-    catName: game.catToken ? game.players.get(game.catToken)?.name : null,
+    catName: cats(game).map((c) => c.name).join(' & ') || null,
     mice: freeMice(game).map((m) => ({ token: m.token, name: m.name })),
     winner: game.winner || null,
     scores: game.state === 'ended' ? finalScores(game) : null,
+    log: logVisible(game, p),
   };
 }
 
@@ -183,19 +212,27 @@ function broadcastLobby(game) {
 function startGame(game) {
   const t = Date.now();
   game.state = 'playing';
-  if (!game.catToken || !game.players.has(game.catToken)) {
+  if (game.catTokens.size === 0) {
     const all = [...game.players.keys()];
-    game.catToken = all[Math.floor(Math.random() * all.length)];
+    game.catTokens.add(all[Math.floor(Math.random() * all.length)]);
   }
   for (const p of game.players.values()) {
-    p.role = p.token === game.catToken ? 'cat' : 'mouse';
+    p.role = game.catTokens.has(p.token) ? 'cat' : 'mouse';
     p.points = 0;
     p.captured = false;
     p.fx = {};
     p.lastContactAt = 0;
     p.powerLockUntil = 0;
     p.powerLockLabel = null;
+    p.captureCooldownUntil = 0;
+    p.wasOutside = false;
   }
+  game.jamUntil = 0;
+  game.caches = [];
+  game.roadNodes = null;
+  game.roadFetchState = null;
+  game.log = [];
+  game.pendingCaptures = new Map();
   game.startedAt = t;
   // le centre de la zone sera fixé sur la position du chat au premier tick
   // après la dispersion (le GPS n'est pas forcément prêt au lancement)
@@ -203,9 +240,9 @@ function startGame(game) {
   game.graceUntil = t + game.graceSec * 1000;
   game.endsAt = game.graceUntil + game.durationMin * 60_000;
   game.nextPingAt = game.graceUntil + 3_000;
-  game.captureCooldownUntil = 0;
-  game.pendingCapture = null;
+  game.nextCacheAt = game.graceUntil + 30_000;
   game.secCount = 0;
+  logEvent(game, 'all', `🏁 La chasse commence — ${cats(game).map((c) => c.name).join(' & ')} ${game.catTokens.size > 1 ? 'sont les chats' : 'est le chat'} !`);
   game.tick = setInterval(() => gameTick(game), 1000);
   for (const p of game.players.values()) {
     if (process.env.DEBUG)
@@ -228,16 +265,14 @@ function endGame(game, winner) {
   game.winner = winner;
   clearInterval(game.tick);
   game.tick = null;
-  if (game.pendingCapture) {
-    clearTimeout(game.pendingCapture.timer);
-    game.pendingCapture = null;
-  }
+  for (const pc of game.pendingCaptures.values()) clearTimeout(pc.timer);
+  game.pendingCaptures.clear();
   if (winner === 'mice') {
     for (const m of freeMice(game)) m.points += SURVIVAL_BONUS;
   }
   io.to(room(game)).emit('gameOver', {
     winner,
-    catName: game.players.get(game.catToken)?.name,
+    catName: cats(game).map((c) => c.name).join(' & '),
     scores: finalScores(game),
   });
   setTimeout(() => games.delete(game.code), 10 * 60_000);
@@ -250,7 +285,7 @@ function gameTick(game) {
 
   if (t >= game.endsAt) return endGame(game, 'mice');
 
-  const cat = game.players.get(game.catToken);
+  const catList = cats(game);
   const mice = freeMice(game);
   if (mice.length === 0) return endGame(game, 'cat');
   if (t < game.graceUntil) return; // tout démarre après la dispersion
@@ -261,12 +296,16 @@ function gameTick(game) {
   // ----- zone rétrécissante
   let zone = null;
   if (game.zone) {
-    if (game.zone.lat == null && cat.pos) {
-      game.zone.lat = cat.pos.lat;
-      game.zone.lng = cat.pos.lng;
-      io.to(room(game)).emit('toast', {
-        msg: `⭕ Zone fixée : ${game.zone.startRadius} m autour du chat, elle rétrécit jusqu'à ${ZONE_MIN_R} m !`,
-      });
+    if (game.zone.lat == null) {
+      const c0 = catList.find((c) => c.pos);
+      if (c0) {
+        game.zone.lat = c0.pos.lat;
+        game.zone.lng = c0.pos.lng;
+        io.to(room(game)).emit('toast', {
+          msg: `⭕ Zone fixée : ${game.zone.startRadius} m autour du chat, elle rétrécit jusqu'à ${ZONE_MIN_R} m !`,
+        });
+        logEvent(game, 'all', `⭕ Zone de jeu fixée (${game.zone.startRadius} m, rétrécit jusqu'à ${ZONE_MIN_R} m)`);
+      }
     }
     if (game.zone.lat != null) {
       const span = Math.max(1, game.endsAt - game.graceUntil);
@@ -281,35 +320,61 @@ function gameTick(game) {
   const isOutside = (p) =>
     !!(zone && p.pos && distM({ lat: zone.lat, lng: zone.lng }, p.pos) > zone.r);
 
+  // chat le plus proche d'une souris (il peut y en avoir plusieurs)
+  const nearestCat = (m) => {
+    let best = null;
+    let bestD = Infinity;
+    for (const c of catList) {
+      const d = distM(c.pos, m.pos);
+      if (d < bestD) {
+        bestD = d;
+        best = c;
+      }
+    }
+    return { nc: best, d: bestD };
+  };
+
   // ----- points
-  if (scoring) cat.points += 1;
+  if (scoring) for (const c of catList) c.points += 1;
   for (const m of mice) {
-    const d = distM(cat.pos, m.pos);
-    if (scoring && !isOutside(m)) {
+    const { nc, d } = nearestCat(m);
+    const out = isOutside(m);
+    if (scoring && !out) {
       // hors zone : on ne gagne rien
       m.points += 1;
-      if (d <= RISK_DIST_M) m.points += 3; // frisson : le chat est tout près
+      if (d <= RISK_DIST_M) m.points += 3; // frisson : un chat est tout près
     }
-    if (d <= CONTACT_DIST_M && t - m.lastContactAt > CONTACT_COOLDOWN_MS) {
+    if (nc && d <= CONTACT_DIST_M && t - m.lastContactAt > CONTACT_COOLDOWN_MS) {
       m.lastContactAt = t;
-      cat.points += 15;
-      emitTo(cat, 'toast', { msg: 'Contact radar : une souris à moins de 50 m (+15 pts)' });
+      nc.points += 15;
+      emitTo(nc, 'toast', { msg: 'Contact radar : une souris à moins de 50 m (+15 pts)' });
+      logEvent(game, 'cats', `📡 Contact radar (${nc.name}) : une souris à moins de 50 m (+15 pts)`);
+    }
+    if (out !== !!m.wasOutside) {
+      m.wasOutside = out;
+      logEvent(game, m.token, out ? '⛔ Sortie de zone — visible et 0 point' : '✅ Retour dans la zone');
     }
   }
 
+  // ----- caches bonus
+  if (game.cachesEnabled) tickCaches(game, t, zone, catList);
+  const cachesPayload = game.caches.map((c) => ({ id: c.id, lat: c.lat, lng: c.lng }));
+
   // ----- radar des souris + spectateurs (toutes les 4 s)
   if (game.secCount % 4 === 0) {
-    const ghost = (cat.fx.ghost || 0) > t;
+    const visibleCats = catList
+      .filter((c) => c.pos && !((c.fx.ghost || 0) > t))
+      .map((c) => ({ name: c.name, lat: c.pos.lat, lng: c.pos.lng, ts: c.posTs }));
+    const anyGhost = catList.some((c) => (c.fx.ghost || 0) > t);
     for (const m of mice) {
+      const { d } = nearestCat(m);
       emitTo(m, 'mouseRadar', {
-        cat: !ghost && cat.pos ? { lat: cat.pos.lat, lng: cat.pos.lng, ts: cat.posTs } : null,
-        ghost,
+        cats: visibleCats,
+        ghost: anyGhost,
         zone,
+        caches: cachesPayload,
         outside: isOutside(m),
-        senseNear:
-          (m.fx.sense || 0) > t && cat.pos && m.pos
-            ? distM(cat.pos, m.pos) <= SENSE_DIST_M
-            : false,
+        senseNear: (m.fx.sense || 0) > t && m.pos ? d <= SENSE_DIST_M : false,
         mates:
           (m.fx.team || 0) > t
             ? mice
@@ -324,27 +389,36 @@ function gameTick(game) {
       .filter((p) => p.pos && !p.captured)
       .map((p) => ({ name: p.name, isCat: p.role === 'cat', lat: p.pos.lat, lng: p.pos.lng }));
     for (const s of [...game.players.values()].filter((p) => p.captured)) {
-      emitTo(s, 'spectate', { players: everyone, zone, you: youPayload(game, s, t), serverNow: t });
+      emitTo(s, 'spectate', { players: everyone, zone, caches: cachesPayload, you: youPayload(game, s, t), serverNow: t });
     }
-    emitTo(cat, 'youUpdate', { you: youPayload(game, cat, t), zone, mice: mice.map((m) => ({ token: m.token, name: m.name })), serverNow: t });
+    for (const c of catList) {
+      emitTo(c, 'youUpdate', {
+        you: youPayload(game, c, t),
+        zone,
+        caches: cachesPayload,
+        mice: mice.map((m) => ({ token: m.token, name: m.name })),
+        serverNow: t,
+      });
+    }
   }
 
   // ----- révélation en quasi temps réel (toutes les 2 s)
   if (game.secCount % 2 === 0) {
     const revealed = mice.filter((m) => (m.fx.reveal || 0) > t && m.pos);
     if (revealed.length) {
-      emitTo(cat, 'reveal', {
-        blips: revealed.map((m) => ({ name: m.name, lat: m.pos.lat, lng: m.pos.lng })),
-      });
+      const blips = revealed.map((m) => ({ name: m.name, lat: m.pos.lat, lng: m.pos.lng }));
+      for (const c of catList) emitTo(c, 'reveal', { blips });
     }
   }
 
-  // ----- scan périodique du chat
+  // ----- scan périodique des chats (partagé : mêmes blips pour tous)
   if (t >= game.nextPingAt) {
-    const interval = (cat.fx.fastping || 0) > t ? FAST_PING_MS : PING_INTERVAL_MS;
+    const interval = catList.some((c) => (c.fx.fastping || 0) > t)
+      ? FAST_PING_MS
+      : PING_INTERVAL_MS;
     game.nextPingAt = t + interval;
-    if ((cat.fx.jam || 0) > t) {
-      emitTo(cat, 'catPing', { jammed: true, at: t, nextIn: interval });
+    if (game.jamUntil > t) {
+      for (const c of catList) emitTo(c, 'catPing', { jammed: true, at: t, nextIn: interval });
     } else {
       // blips anonymes : savoir QUI est où, c'est le rôle des pouvoirs
       // (Révélation, Coup de filet) — on n'envoie même pas les noms au client
@@ -364,20 +438,102 @@ function gameTick(game) {
           blips.push({ lat: p.lat, lng: p.lng });
         }
       }
-      emitTo(cat, 'catPing', { blips, at: t, nextIn: interval });
+      for (const c of catList) emitTo(c, 'catPing', { blips, at: t, nextIn: interval });
     }
   }
 }
 
-function resolveCapture(game, accepted, why) {
-  const pc = game.pendingCapture;
+// ---------------------------------------------------------------- caches bonus
+
+function cacheCenter(game, zone, catList) {
+  if (zone) return { lat: zone.lat, lng: zone.lng, r: Math.max(zone.r, 120) };
+  const c0 = catList.find((c) => c.pos);
+  return c0 ? { lat: c0.pos.lat, lng: c0.pos.lng, r: 400 } : null;
+}
+
+// récupère une fois par partie les points des rues alentour (OpenStreetMap),
+// pour faire apparaître les caches sur de vraies rues et pas dans les immeubles
+async function fetchRoadNodes(game, ctr) {
+  game.roadFetchState = 'pending';
+  try {
+    const radius = Math.max(600, Math.round(ctr.r * 1.3));
+    const q = `[out:json][timeout:10];way(around:${radius},${ctr.lat},${ctr.lng})["highway"~"^(residential|living_street|pedestrian|footway|path|unclassified|tertiary|secondary|primary|service|cycleway|track)$"];node(w);out skel 500;`;
+    const res = await fetch('https://overpass-api.de/api/interpreter', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'data=' + encodeURIComponent(q),
+    });
+    const data = await res.json();
+    const nodes = (data.elements || [])
+      .filter((e) => e.type === 'node')
+      .map((e) => ({ lat: e.lat, lng: e.lon }));
+    if (nodes.length) game.roadNodes = nodes;
+    game.roadFetchState = 'done';
+    if (process.env.DEBUG) console.log('[roads]', game.code, nodes.length, 'nœuds');
+  } catch (e) {
+    game.roadFetchState = 'failed'; // repli : points aléatoires
+  }
+}
+
+function pickCachePos(game, ctr) {
+  const inside = (p) => distM(p, ctr) <= ctr.r * 0.85;
+  // pas de cache-cadeau : jamais à moins de 60 m d'un joueur en jeu
+  const players = [...game.players.values()].filter((p) => !p.captured && p.pos);
+  const farFromPlayers = (p) => players.every((pl) => distM(pl.pos, p) > 60);
+  if (game.roadNodes && game.roadNodes.length) {
+    const candidates = game.roadNodes.filter((p) => inside(p) && farFromPlayers(p));
+    if (candidates.length) {
+      return candidates[Math.floor(Math.random() * candidates.length)];
+    }
+  }
+  for (let i = 0; i < 10; i++) {
+    const ang = Math.random() * 2 * Math.PI;
+    const r = (0.25 + Math.random() * 0.6) * ctr.r;
+    const p = offsetPos(ctr, Math.cos(ang) * r, Math.sin(ang) * r);
+    if (farFromPlayers(p)) return p;
+  }
+  return null; // trop serré : on retentera au prochain créneau
+}
+
+function tickCaches(game, t, zone, catList) {
+  game.caches = game.caches.filter((c) => c.expiresAt > t);
+
+  // ramassage : premier joueur libre (chat ou souris) à moins de 20 m, GPS frais
+  for (const cache of [...game.caches]) {
+    const taker = [...game.players.values()].find(
+      (p) => !p.captured && p.pos && t - p.posTs < 30_000 && distM(p.pos, cache) <= CACHE_COLLECT_M
+    );
+    if (taker) {
+      taker.points += CACHE_VALUE_PTS;
+      game.caches = game.caches.filter((c) => c.id !== cache.id);
+      io.to(room(game)).emit('toast', { msg: `💰 ${taker.name} a ramassé un cache (+${CACHE_VALUE_PTS} pts) !` });
+      logEvent(game, 'all', `💰 ${taker.name} a ramassé un cache (+${CACHE_VALUE_PTS} pts)`);
+    }
+  }
+
+  const ctr = cacheCenter(game, zone, catList);
+  if (!ctr) return;
+  if (!game.roadFetchState) fetchRoadNodes(game, ctr);
+  if (t >= game.nextCacheAt && game.caches.length < CACHE_MAX) {
+    const pos = pickCachePos(game, ctr);
+    if (pos) {
+      game.caches.push({ id: game.cacheSeq++, lat: pos.lat, lng: pos.lng, expiresAt: t + CACHE_TTL_MS });
+      io.to(room(game)).emit('toast', { msg: '💰 Un cache bonus vient d’apparaître sur la carte !' });
+      logEvent(game, 'all', '💰 Un cache bonus est apparu sur la carte');
+    }
+    game.nextCacheAt = t + 75_000 + Math.random() * 75_000;
+  }
+}
+
+function resolveCapture(game, mouseToken, accepted, why) {
+  const pc = game.pendingCaptures.get(mouseToken);
   if (!pc) return;
   clearTimeout(pc.timer);
-  game.pendingCapture = null;
+  game.pendingCaptures.delete(mouseToken);
   const t = Date.now();
-  const cat = game.players.get(game.catToken);
-  const m = game.players.get(pc.mouseToken);
-  if (!m) return;
+  const cat = game.players.get(pc.catToken);
+  const m = game.players.get(mouseToken);
+  if (!m || !cat) return;
   if (accepted) {
     m.captured = true;
     cat.points += 40;
@@ -385,10 +541,11 @@ function resolveCapture(game, accepted, why) {
       name: m.name,
       remaining: freeMice(game).length,
     });
+    logEvent(game, 'all', `🎯 ${m.name} a été capturé·e par ${cat.name} (+40 pts)`);
     emitTo(m, 'youCaptured', {});
     if (freeMice(game).length === 0) endGame(game, 'cat');
   } else {
-    game.captureCooldownUntil = t + CAPTURE_COOLDOWN_MS;
+    cat.captureCooldownUntil = t + CAPTURE_COOLDOWN_MS;
     // contesté = le chat s'est trompé → pénalité (pas de pénalité sur simple absence de réponse)
     if (why === 'refuse') cat.points = Math.max(0, cat.points - CAPTURE_PENALTY_PTS);
     emitTo(cat, 'captureResult', {
@@ -397,6 +554,13 @@ function resolveCapture(game, accepted, why) {
       name: m.name,
       cooldownMs: CAPTURE_COOLDOWN_MS,
     });
+    logEvent(
+      game,
+      'cats',
+      why === 'refuse'
+        ? `❌ ${m.name} a contesté la capture de ${cat.name} (−${CAPTURE_PENALTY_PTS} pts)`
+        : `⌛ ${m.name} n'a pas répondu à la capture de ${cat.name}`
+    );
     emitTo(m, 'toast', { msg: 'Capture refusée, la partie continue.' });
   }
 }
@@ -422,18 +586,25 @@ io.on('connection', (socket) => {
       code,
       state: 'lobby',
       hostToken: token,
-      catToken: null,
+      catTokens: new Set(),
       durationMin: 30,
       graceSec: DEFAULT_GRACE_SEC,
       zoneCfg: 0,
       zone: null,
+      cachesEnabled: true,
+      caches: [],
+      nextCacheAt: 0,
+      cacheSeq: 1,
+      roadNodes: null,
+      roadFetchState: null,
+      jamUntil: 0,
+      log: [],
       powers: defaultPowers(),
       players: new Map(),
       createdAt: Date.now(),
       lastActivity: Date.now(),
       tick: null,
-      pendingCapture: null,
-      captureCooldownUntil: 0,
+      pendingCaptures: new Map(), // mouseToken -> {catToken, timer}
       winner: null,
     };
     game.players.set(token, newPlayer(token, name, socket.id));
@@ -494,7 +665,7 @@ io.on('connection', (socket) => {
     if (game.hostToken === player.token) {
       game.hostToken = [...game.players.keys()][0];
     }
-    if (game.catToken === player.token) game.catToken = null;
+    game.catTokens.delete(player.token);
     broadcastLobby(game);
   });
 
@@ -503,7 +674,17 @@ io.on('connection', (socket) => {
     if (!game || !player || game.state !== 'lobby') return;
     if (player.token !== game.hostToken) return;
     if (!game.players.has(target)) return;
-    game.catToken = target;
+    // toggle : on peut désigner PLUSIEURS chats (mode multi-chats)
+    if (game.catTokens.has(target)) game.catTokens.delete(target);
+    else game.catTokens.add(target);
+    broadcastLobby(game);
+  });
+
+  socket.on('setCaches', ({ on }) => {
+    const { game, player } = ctx(socket);
+    if (!game || !player || game.state !== 'lobby') return;
+    if (player.token !== game.hostToken) return;
+    game.cachesEnabled = !!on;
     broadcastLobby(game);
   });
 
@@ -557,6 +738,9 @@ io.on('connection', (socket) => {
       return cb && cb({ ok: false, error: 'Seul l’hôte peut lancer.' });
     if (game.players.size < 2)
       return cb && cb({ ok: false, error: 'Il faut au moins 2 joueurs.' });
+    game.catTokens = new Set([...game.catTokens].filter((tk) => game.players.has(tk)));
+    if (game.catTokens.size >= game.players.size)
+      return cb && cb({ ok: false, error: 'Il faut au moins une souris !' });
     startGame(game);
     cb && cb({ ok: true });
   });
@@ -578,15 +762,18 @@ io.on('connection', (socket) => {
     if (!game || !player || game.state !== 'playing') return cb({ ok: false });
     if (player.role !== 'cat') return cb({ ok: false });
     if (t < game.graceUntil) return cb({ ok: false, error: 'Attends la fin de la dispersion.' });
-    if (game.pendingCapture) return cb({ ok: false, error: 'Capture déjà en cours.' });
-    if (t < game.captureCooldownUntil)
+    if ([...game.pendingCaptures.values()].some((pc) => pc.catToken === player.token))
+      return cb({ ok: false, error: 'Ta capture précédente attend encore une réponse.' });
+    if (t < (player.captureCooldownUntil || 0))
       return cb({
         ok: false,
         error: 'Radar de capture en recharge.',
-        cooldownMs: game.captureCooldownUntil - t,
+        cooldownMs: player.captureCooldownUntil - t,
       });
     const m = game.players.get(target);
     if (!m || m.role !== 'mouse' || m.captured) return cb({ ok: false });
+    if (game.pendingCaptures.has(m.token))
+      return cb({ ok: false, error: `${m.name} répond déjà à une autre capture.` });
     if (!m.connected)
       return cb({ ok: false, error: `${m.name} est déconnecté·e, impossible de valider.` });
     if (!player.pos || t - player.posTs > POS_FRESH_MS)
@@ -597,27 +784,28 @@ io.on('connection', (socket) => {
     const d = distM(player.pos, m.pos);
     const slack = Math.min(10, ((player.acc || 0) + (m.acc || 0)) / 2);
     if (d > CAPTURE_DIST_M + slack) {
-      game.captureCooldownUntil = t + CAPTURE_COOLDOWN_MS;
+      player.captureCooldownUntil = t + CAPTURE_COOLDOWN_MS;
       player.points = Math.max(0, player.points - CAPTURE_PENALTY_PTS);
+      logEvent(game, 'cats', `📍 ${player.name} a déclaré trop loin de ${m.name} (−${CAPTURE_PENALTY_PTS} pts)`);
       return cb({
         ok: false,
         error: `Trop loin de ${m.name}. −${CAPTURE_PENALTY_PTS} pts, recharge 45 s.`,
         cooldownMs: CAPTURE_COOLDOWN_MS,
       });
     }
-    game.pendingCapture = {
-      mouseToken: m.token,
-      timer: setTimeout(() => resolveCapture(game, false, 'timeout'), PROMPT_TIMEOUT_MS),
-    };
+    game.pendingCaptures.set(m.token, {
+      catToken: player.token,
+      timer: setTimeout(() => resolveCapture(game, m.token, false, 'timeout'), PROMPT_TIMEOUT_MS),
+    });
     emitTo(m, 'capturePrompt', { catName: player.name, timeoutMs: PROMPT_TIMEOUT_MS });
     cb({ ok: true, pending: true, name: m.name });
   });
 
   socket.on('captureAnswer', ({ accept }) => {
     const { game, player } = ctx(socket);
-    if (!game || !player || !game.pendingCapture) return;
-    if (game.pendingCapture.mouseToken !== player.token) return;
-    resolveCapture(game, !!accept, accept ? 'accept' : 'refuse');
+    if (!game || !player) return;
+    if (!game.pendingCaptures.has(player.token)) return;
+    resolveCapture(game, player.token, !!accept, accept ? 'accept' : 'refuse');
   });
 
   socket.on('power', ({ id, target, pos }, cb) => {
@@ -643,7 +831,6 @@ io.on('connection', (socket) => {
         error: `${player.powerLockLabel} est encore actif (${Math.ceil((player.powerLockUntil - t) / 1000)} s). Un seul pouvoir à la fois !`,
       });
 
-    const cat = game.players.get(game.catToken);
     let extra = {};
 
     if (player.role === 'cat') {
@@ -654,10 +841,12 @@ io.on('connection', (socket) => {
         if (id === 'ring') {
           if (!m.connected) return cb({ ok: false, error: `${m.name} est déconnecté·e.` });
           emitTo(m, 'ring', { sec: def.dur || 10 });
+          logEvent(game, m.token, '📢 Ton téléphone a été fait sonner');
           extra = { msg: `Le téléphone de ${m.name} sonne !` };
         } else {
           m.fx.reveal = t + def.dur * 1000;
           emitTo(m, 'toast', { msg: `🔍 Le chat t’a révélé·e : position précise visible ${def.dur} s !` });
+          logEvent(game, m.token, `🔍 Révélé·e par ${player.name} (${def.dur} s)`);
           extra = { msg: `${m.name} est révélé·e pendant ${def.dur} s.` };
         }
       } else if (id === 'ghost') {
@@ -677,14 +866,17 @@ io.on('connection', (socket) => {
       else if (id === 'team') player.fx.team = t + def.dur * 1000;
       else if (id === 'invis') player.fx.invis = t + def.dur * 1000;
       else if (id === 'jam') {
-        cat.fx.jam = t + def.dur * 1000;
-        emitTo(cat, 'jamStart', { until: cat.fx.jam });
+        // brouille le radar partagé de TOUS les chats
+        game.jamUntil = t + def.dur * 1000;
+        for (const c of cats(game)) emitTo(c, 'jamStart', { until: game.jamUntil });
+        logEvent(game, 'cats', `⚡ Radar brouillé par une souris (${def.dur} s)`);
       } else if (id === 'fakefriend') {
         const m = game.players.get(target);
         if (!m || m.role !== 'mouse' || m.captured || m.token === player.token)
           return cb({ ok: false, error: 'Cible invalide.' });
         if (!m.connected) return cb({ ok: false, error: `${m.name} est déconnecté·e.` });
         emitTo(m, 'ring', { sec: def.dur || 10 });
+        logEvent(game, m.token, '📢 Ton téléphone a été fait sonner');
         extra = { msg: `Le téléphone de ${m.name} sonne… le chat va l’adorer 😈` };
       } else if (id === 'decoy') {
         if (!player.pos) return cb({ ok: false, error: 'Ton GPS n’est pas prêt.' });
@@ -704,6 +896,7 @@ io.on('connection', (socket) => {
       player.powerLockUntil = t + def.dur * 1000;
       player.powerLockLabel = def.label;
     }
+    logEvent(game, player.token, `⚡ Tu as utilisé ${def.label} (−${def.cost} pts)`);
     cb({ ok: true, you: youPayload(game, player, t), ...extra });
   });
 

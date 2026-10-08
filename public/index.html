@@ -39,7 +39,7 @@
         <p id="permHint" class="hint"></p>
       </div>
       <ul id="playerList" class="playerList"></ul>
-      <p id="catHint" class="hint" hidden>Touche un joueur pour le désigner comme chat (sinon : tirage au sort).</p>
+      <p id="catHint" class="hint" hidden>Touche un ou plusieurs joueurs pour les désigner chats — retouche pour annuler (sinon : tirage au sort d’un seul).</p>
       <div id="hostControls" hidden>
         <label class="label" for="durationSel">Durée de la chasse</label>
         <select id="durationSel">
@@ -58,6 +58,11 @@
           <option value="500">500 m au départ</option>
           <option value="800">800 m au départ</option>
           <option value="1200">1,2 km au départ</option>
+        </select>
+        <label class="label" for="cachesSel">Caches bonus (💰 +15 pts, à ramasser dans les rues)</label>
+        <select id="cachesSel">
+          <option value="1" selected>Activés</option>
+          <option value="0">Désactivés</option>
         </select>
         <label class="label" for="graceSel">Attente avant le début (dispersion des souris)</label>
         <select id="graceSel">
@@ -106,6 +111,8 @@
       <div id="fxRow" class="fxRow"></div>
       <button id="captureBtn" class="btn danger" hidden>🎯 J’ai vu une souris</button>
       <div id="powersRow" class="powersRow"></div>
+      <button id="logToggle" class="btn ghost">📜 Journal de partie</button>
+      <div id="logPanel" class="logPanel" hidden></div>
       <p id="gpsWarn" class="error" hidden></p>
     </section>
 

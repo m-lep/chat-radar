@@ -49,7 +49,18 @@ sont connectés.
 
 ## Règles du jeu
 
-- **1 chat** contre **N souris**. Le chat gèle au départ (dispersion des souris).
+- **1 ou plusieurs chats** contre **N souris** (l'hôte touche un ou
+  plusieurs joueurs dans le lobby pour les désigner chats — pour les
+  groupes de 8+, deux chats c'est très bien). Les chats partagent le même
+  scan radar, mais chacun a ses points, ses pouvoirs et sa recharge de
+  capture. Les chats gèlent au départ (dispersion des souris).
+- **Caches bonus** (option, activée par défaut) : des 💰 apparaissent sur
+  de **vraies rues** (données OpenStreetMap) toutes les ~2 min, visibles
+  par tous ; le premier joueur (chat ou souris) qui s'en approche à moins
+  de 20 m les ramasse (+15 pts). Jamais à moins de 60 m d'un joueur.
+- **Journal de partie** : bouton 📜 sous les pouvoirs — l'historique
+  horodaté des événements (captures, contacts radar, zone, caches, pouvoirs
+  utilisés…), chacun ne voyant que ce qu'il a le droit de savoir.
 - **L'hôte règle tout dans le lobby** : qui est le chat (toucher un joueur,
   sinon tirage au sort), la durée de la chasse (10–60 min), le temps de
   dispersion (0 s à 5 min), la **zone rétrécissante** (désactivée, ou 200 m

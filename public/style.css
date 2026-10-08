@@ -182,6 +182,7 @@ input:focus, select:focus { border-color: var(--accent); }
 .blip.mate .blipDot { background: #2f6df6; }
 .blip.cat .blipDot { background: #e0492f; width: 18px; height: 18px; }
 .blip.reveal .blipDot { background: #e0492f; }
+.blip.cache .blipDot { background: #d4a017; width: 16px; height: 16px; }
 .blipName {
   font-size: 11px; font-weight: 700;
   background: rgba(255, 255, 255, 0.88);
@@ -303,6 +304,18 @@ input:focus, select:focus { border-color: var(--accent); }
 .powerBtn .pname { font-weight: 700; font-size: 0.85rem; }
 .powerBtn .pcost { font-size: 0.75rem; color: var(--accent); font-weight: 600; }
 .powerBtn .pdesc { font-size: 0.68rem; color: var(--muted); line-height: 1.25; }
+
+.logPanel {
+  background: var(--card);
+  border: 1.5px solid var(--line);
+  border-radius: 14px;
+  padding: 10px 14px;
+  max-height: 32vh;
+  overflow-y: auto;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.logEntry { font-size: 0.85rem; line-height: 1.35; }
+.logEntry .logTime { color: var(--muted); font-size: 0.75rem; margin-right: 6px; font-variant-numeric: tabular-nums; }
 
 .scores { width: 100%; border-collapse: collapse; }
 .scores td, .scores th { padding: 10px 8px; border-bottom: 1px solid var(--line); text-align: left; }
