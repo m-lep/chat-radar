@@ -737,17 +737,24 @@ function refreshPowerButtons() {
   const lockLeft = Math.max(0, (S.you?.lockMs || 0) - elapsed);
   const lockLabel = lockLeft > 0 ? S.you?.lockLabel : null;
 
+  const cds = S.you?.powerCd || {};
   document.querySelectorAll('.powerBtn').forEach((b) => {
     const isActive = lockLabel && b.dataset.label === lockLabel;
+    const cdLeft = Math.max(0, (cds[b.dataset.power] || 0) - elapsed);
     b.classList.toggle('activePower', !!isActive);
     const costEl = b.querySelector('.pcost');
     if (costEl) {
       costEl.textContent = isActive
         ? `⏳ actif ${Math.ceil(lockLeft / 1000)} s`
-        : `${b.dataset.cost} pts`;
+        : cdLeft > 0
+          ? `♻️ recharge ${Math.ceil(cdLeft / 1000)} s`
+          : `${b.dataset.cost} pts`;
     }
     b.disabled =
-      lockLeft > 0 || pts < parseInt(b.dataset.cost, 10) || now() < S.graceUntil;
+      lockLeft > 0 ||
+      cdLeft > 0 ||
+      pts < parseInt(b.dataset.cost, 10) ||
+      now() < S.graceUntil;
   });
 
   // alerte claire quand l'effet se termine
@@ -1455,3 +1462,8 @@ setInterval(() => {
 $('codeInput').addEventListener('input', () => {
   $('codeInput').value = $('codeInput').value.toUpperCase();
 });
+
+// PWA : service worker minimal (installation sur l'écran d'accueil)
+if ('serviceWorker' in navigator && window.isSecureContext) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}

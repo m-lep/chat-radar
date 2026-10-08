@@ -111,6 +111,14 @@ sont connectés.
 - **Fin** : toutes les souris capturées → le chat gagne ; sinon les souris
   survivantes gagnent au bout du temps imparti.
 
+## Installer sur le téléphone (PWA)
+
+Le site est installable comme une app (plein écran, icône sur l'écran
+d'accueil) : sur **Android**, Chrome propose « Ajouter à l'écran
+d'accueil » (menu ⋮) ; sur **iPhone**, Safari → bouton Partager →
+« Sur l'écran d'accueil ». Aucune mise en cache : l'app charge toujours la
+dernière version du jeu.
+
 ## Conseils de jeu (limites du web mobile)
 
 - **L'écran doit rester allumé** : le navigateur coupe le GPS si le téléphone

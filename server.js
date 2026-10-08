@@ -34,6 +34,7 @@ const CACHE_VALUE_PTS = 15;         // points par cache bonus ramassé
 const CACHE_COLLECT_M = 20;         // distance de ramassage
 const CACHE_TTL_MS = 4 * 60_000;    // un cache non ramassé disparaît
 const CACHE_MAX = 2;                // caches simultanés max
+const POWER_REUSE_MS = 60_000;      // recharge d'un pouvoir après la fin de son effet
 
 // dur = durée d'effet en secondes (0 = instantané, non éditable) ;
 // cost/dur/enabled sont copiés par partie et réglables par l'hôte
@@ -161,6 +162,11 @@ function youPayload(game, p, t) {
     cooldownMs: p.role === 'cat' ? Math.max(0, (p.captureCooldownUntil || 0) - t) : 0,
     lockMs: Math.max(0, (p.powerLockUntil || 0) - t),
     lockLabel: (p.powerLockUntil || 0) > t ? p.powerLockLabel : null,
+    powerCd: Object.fromEntries(
+      Object.entries(p.powerCooldowns || {})
+        .filter(([, until]) => until > t)
+        .map(([id, until]) => [id, until - t])
+    ),
   };
 }
 
@@ -224,6 +230,7 @@ function startGame(game) {
     p.lastContactAt = 0;
     p.powerLockUntil = 0;
     p.powerLockLabel = null;
+    p.powerCooldowns = {};
     p.captureCooldownUntil = 0;
     p.wasOutside = false;
   }
@@ -830,6 +837,13 @@ io.on('connection', (socket) => {
         ok: false,
         error: `${player.powerLockLabel} est encore actif (${Math.ceil((player.powerLockUntil - t) / 1000)} s). Un seul pouvoir à la fois !`,
       });
+    // et un même pouvoir ne se réutilise pas tout de suite
+    const reuseAt = (player.powerCooldowns && player.powerCooldowns[id]) || 0;
+    if (reuseAt > t)
+      return cb({
+        ok: false,
+        error: `${def.label} en recharge (${Math.ceil((reuseAt - t) / 1000)} s).`,
+      });
 
     let extra = {};
 
@@ -896,6 +910,8 @@ io.on('connection', (socket) => {
       player.powerLockUntil = t + def.dur * 1000;
       player.powerLockLabel = def.label;
     }
+    if (!player.powerCooldowns) player.powerCooldowns = {};
+    player.powerCooldowns[id] = t + def.dur * 1000 + POWER_REUSE_MS;
     logEvent(game, player.token, `⚡ Tu as utilisé ${def.label} (−${def.cost} pts)`);
     cb({ ok: true, you: youPayload(game, player, t), ...extra });
   });
